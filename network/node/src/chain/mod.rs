@@ -31,6 +31,6 @@ pub use propose_snapshot::submit_propose_snapshot;
 pub use resize_committee::submit_resize_committee;
 pub use resize_peer_set::submit_resize_peer_set;
 pub use set_network_tls::submit_set_network_tls;
-pub use sync_spool::submit_sync_spool;
+pub use sync_spool::{submit_sync_spool, submit_sync_spools};
 pub use vote_assignment::submit_vote_assignment;
 pub use vote_snapshot::submit_vote_snapshot;

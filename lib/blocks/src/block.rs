@@ -543,6 +543,119 @@ mod tests {
         }
     }
 
+    /// A single transaction that batches several `SyncSpool` instructions, the shape
+    /// produced by the node's `submit_sync_spools` must parse into one
+    /// `ParsedInstruction::SyncSpool` per instruction, each paired with its own
+    /// `SpoolSynced` event in order.
+    #[test]
+    fn test_parse_transaction_batches_multiple_sync_spools() {
+        use tape_api::instruction::build_sync_spool_ix;
+        use tape_api::program::tapedrive::{epoch_pda, group_pda};
+
+        let fee_payer = Address::new_unique();
+        let authority = Address::new_unique();
+        let node = Address::new_unique();
+        let epoch = EpochNumber(5);
+
+        // Three spools, each in a distinct group (GROUP_SIZE-spaced).
+        let spools = [SpoolIndex(0), SpoolIndex(20), SpoolIndex(40)];
+        let groups: Vec<GroupIndex> =
+            spools.iter().map(|s| GroupIndex::containing(*s)).collect();
+
+        let tapedrive_program = tapedrive::ID;
+        let mut account_keys = vec![
+            tapedrive_program,
+            fee_payer.into(),
+            authority.into(),
+            system_pda().0.into(),
+            epoch_pda(epoch).0.into(),
+            node.into(),
+        ];
+        for group in &groups {
+            account_keys.push(group_pda(epoch, *group).0.into());
+        }
+
+        let instructions: Vec<UiCompiledInstruction> = spools
+            .iter()
+            .zip(&groups)
+            .map(|(spool, group)| {
+                let ix = build_sync_spool_ix(fee_payer, authority, node, epoch, *group, *spool);
+                compile_ui_instruction(&ix, &account_keys)
+            })
+            .collect();
+
+        // One SpoolSynced "Program data:" event per instruction,
+        let mut log_messages = Vec::new();
+        for (spool, group) in spools.iter().zip(&groups) {
+            log_messages.push(format!("Program {} invoke [1]", tapedrive_program));
+            log_messages.push(encode_event(
+                EventType::SpoolSynced,
+                &SpoolSynced {
+                    node,
+                    epoch,
+                    group: *group,
+                    spool: *spool,
+                    phase: EpochPhase::Sync as u64,
+                },
+            ));
+            log_messages.push(format!("Program {} success", tapedrive_program));
+        }
+
+        let tx = EncodedTransactionWithStatusMeta {
+            transaction: EncodedTransaction::Json(UiTransaction {
+                signatures: vec![],
+                message: UiMessage::Raw(raw_message(&account_keys, instructions)),
+            }),
+            meta: Some(UiTransactionStatusMeta {
+                err: None,
+                status: Ok(()),
+                fee: 0,
+                pre_balances: vec![],
+                post_balances: vec![],
+                inner_instructions: OptionSerializer::None,
+                log_messages: OptionSerializer::Some(log_messages),
+                pre_token_balances: OptionSerializer::None,
+                post_token_balances: OptionSerializer::None,
+                rewards: OptionSerializer::None,
+                loaded_addresses: OptionSerializer::Skip,
+                return_data: OptionSerializer::Skip,
+                compute_units_consumed: OptionSerializer::Skip,
+                cost_units: OptionSerializer::Skip,
+            }),
+            version: None,
+        };
+
+        let (raw_instructions, events) = parse_transaction(&tx).unwrap();
+        assert_eq!(raw_instructions.len(), 3, "one raw instruction per batched sync");
+        assert_eq!(events.len(), 3, "one SpoolSynced event per batched sync");
+
+        for (i, spool) in spools.iter().enumerate() {
+            match &raw_instructions[i] {
+                RawInstruction::SyncSpool { node: n, spool: s } => {
+                    assert_eq!(*n, node);
+                    assert_eq!(*s, spool.as_u64());
+                }
+                other => panic!("expected SyncSpool at {i}, got {other:?}"),
+            }
+        }
+
+        let merged = merge(raw_instructions, events).unwrap();
+        assert_eq!(merged.len(), 3);
+        for (i, (spool, group)) in spools.iter().zip(&groups).enumerate() {
+            match &merged[i] {
+                ParsedInstruction::SyncSpool { node: n, spool: s, event } => {
+                    assert_eq!(*n, node, "node mismatch at {i}");
+                    assert_eq!(*s, spool.as_u64(), "spool mismatch at {i}");
+                    // The positionally-paired event must be this instruction's own.
+                    assert_eq!(event.spool, *spool, "paired event spool mismatch at {i}");
+                    assert_eq!(event.group, *group, "paired event group mismatch at {i}");
+                    assert_eq!(event.epoch, epoch);
+                }
+                other => panic!("expected merged SyncSpool at {i}, got {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn test_parse_transaction_interleaves_inner_instructions_by_outer_index() {
         let fee_payer = Address::new_unique();

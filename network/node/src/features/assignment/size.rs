@@ -449,7 +449,7 @@ mod tests {
             .unwrap();
 
         // voting 9 -> cutoff 8; tape ended at 7 (<= 8) -> excluded.
-        let sizes = group_sizes(&store, EpochNumber(9),  1).unwrap();
+        let sizes = group_sizes(&store, EpochNumber(9), 1).unwrap();
         assert_eq!(
             sizes[0],
             StorageUnits::zero(),
@@ -476,8 +476,7 @@ mod tests {
             .unwrap();
 
         for voting in 9..=12u64 {
-            let sizes =
-                group_sizes(&store, EpochNumber(voting), 1).unwrap();
+            let sizes = group_sizes(&store, EpochNumber(voting), 1).unwrap();
             assert_eq!(sizes[0], size, "should count at voting epoch {voting}");
         }
 
@@ -486,7 +485,7 @@ mod tests {
         assert_eq!(sizes[0], StorageUnits::zero(), "not yet eligible at voting 8");
 
         // After the tape is dead by the cutoff: voting 13 -> cutoff 12, end 12 <= 12.
-        let sizes = group_sizes(&store, EpochNumber(13),  1).unwrap();
+        let sizes = group_sizes(&store, EpochNumber(13), 1).unwrap();
         assert_eq!(sizes[0], StorageUnits::zero(), "expired by cutoff at voting 13");
     }
 }

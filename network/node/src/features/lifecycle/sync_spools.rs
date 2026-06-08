@@ -13,11 +13,14 @@ use tape_retry::{Backoff, RetryConfig, backoff_or_cancel};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use crate::chain::submit_sync_spool;
+use crate::chain::{submit_sync_spool, submit_sync_spools};
 use crate::core::chain_tx::{TxOutcome, TxRejectionKind, submit_if_at_tip};
 use crate::context::NodeContext;
 use crate::features::lifecycle::types::{Action, TaskDone};
 use crate::features::lifecycle::wait_spool_ready::{Readiness, check_readiness};
+
+/// Max `SyncSpool` instructions packed into one transaction.
+const MAX_SYNC_BATCH: usize = 10;
 
 // Purpose: Submit SyncSpool transactions to attest that this node has synced
 //          its assigned spool data for the current epoch.
@@ -63,10 +66,28 @@ pub async fn run<Db: Store, Cluster: Api, Blockchain: Rpc>(
             return TaskDone::Rejected(Action::SyncSpools, epoch);
         }
 
-        let Some(spool) = pending_spool_list(&ctx, &completed).into_iter().next() else {
+        let pending = pending_spool_list(&ctx, &completed);
+        let Some(&spool) = pending.first() else {
             info!(epoch = epoch.0, "sync_spools: all spools synced");
             return TaskDone::Done(Action::SyncSpools, epoch);
         };
+
+        // Fast path: pack up to MAX_SYNC_BATCH pending syncs into one atomic
+        // transaction. On any rejection (e.g. the phase advanced mid-batch, or a
+        // spool was already synced) we fall through to the proven per-spool path
+        // below, which handles every outcome individually.
+        if pending.len() > 1 {
+            let batch: Vec<SpoolIndex> = pending.iter().copied().take(MAX_SYNC_BATCH).collect();
+            info!(epoch = epoch.0, count = batch.len(), "sync_spools: submitting batch");
+            if let TxOutcome::Confirmed(sig) =
+                submit_if_at_tip(&ctx.ingest, submit_sync_spools(&ctx, epoch, &batch)).await
+            {
+                info!(epoch = epoch.0, count = batch.len(), %sig, "sync_spools: batch confirmed");
+                completed.extend(batch);
+                continue;
+            }
+            debug!(epoch = epoch.0, "sync_spools: batch rejected, falling back to per-spool");
+        }
 
         info!(epoch = epoch.0, %spool, "sync_spools: submitting");
         let outcome = submit_if_at_tip(&ctx.ingest, submit_sync_spool(&ctx, epoch, spool)).await;

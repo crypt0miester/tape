@@ -228,24 +228,18 @@ async fn read_node(harness: &SimnetHarness, node_index: usize) -> tape_api::stat
 async fn wait_track(harness: &SimnetHarness, track: Address, timeout: Duration) {
     let start = Instant::now();
     loop {
-        let running = harness
-            .nodes()
-            .iter()
-            .filter(|node| node.is_running())
-            .count();
-        let seen = harness
-            .nodes()
-            .iter()
-            .filter(|node| node.is_running())
-            .filter(|node| {
-                let store = &node.context().store;
-                let has_track = store.has_track(track).expect("read track");
-                let has_data = store.has_track_data(track).expect("read track data");
-                let has_object_info =
-                    store.has_object_info(track).expect("read object info");
-                has_track && has_data && has_object_info
-            })
-            .count();
+        let mut running = 0;
+        let mut seen = 0;
+        for node in harness.nodes().iter().filter(|node| node.is_running()) {
+            running += 1;
+            let store = &node.context().store;
+            let has_track = store.has_track(track).expect("read track");
+            let has_data = store.has_track_data(track).expect("read track data");
+            let has_object_info = store.has_object_info(track).expect("read object info");
+            if has_track && has_data && has_object_info {
+                seen += 1;
+            }
+        }
 
         if seen == running {
             return;
